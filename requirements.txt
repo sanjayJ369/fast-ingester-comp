@@ -1,0 +1,36 @@
+# Core
+asyncio-throttle
+aiohttp
+aiofiles
+
+# Document parsing
+pdfplumber
+python-docx
+beautifulsoup4
+openpyxl
+xlrd
+
+# Embeddings (MRL support)
+sentence-transformers
+torch
+einops
+
+# Vector DB
+qdrant-client
+
+# Keyword search
+rank-bm25
+
+# Clustering
+scikit-learn
+numpy
+
+# LLM
+anthropic
+
+# Arrow IPC (zero-copy handoff from Go ingestor)
+pyarrow
+
+# Utils
+python-dotenv
+tqdm

@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.env
+data/
+*.pkl
+venv/
+.venv/
+.DS_Store
+
+# Go build artifacts
+go-ingestor/ingestor
+go-ingestor/lib/
+
+# ONNX models (download separately)
+models/
+
+# Testing Set (large PDFs, download separately)
+Testing Set/
