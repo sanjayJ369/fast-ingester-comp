@@ -40,7 +40,10 @@ setup:
 	sudo apt-get update && sudo apt-get install -y \
 		python3 python3-pip python3-venv \
 		poppler-utils build-essential libffi-dev \
-		libarrow-dev
+		ca-certificates curl gnupg
+	curl -fsSL https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb -o /tmp/arrow.deb
+	sudo apt-get install -y /tmp/arrow.deb
+	sudo apt-get update && sudo apt-get install -y libarrow-dev
 	sudo snap install go --classic
 	pip install --break-system-packages -r requirements.txt einops
 	pip install --break-system-packages torch --index-url https://download.pytorch.org/whl/cu124
