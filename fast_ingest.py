@@ -145,5 +145,5 @@ def fast_ingest(doc_dir: str) -> dict:
 
 
 if __name__ == "__main__":
-    doc_dir = sys.argv[1] if len(sys.argv) > 1 else "./data/corpus"
+    doc_dir = sys.argv[1] if len(sys.argv) > 1 else "./Testing Set"
     fast_ingest(doc_dir)

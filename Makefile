@@ -1,25 +1,25 @@
-.PHONY: build clean ingest ingest-fast query test setup e2e
+.PHONY: build clean ingest ingest-fast query test setup e2e bench
 
 GO_DIR       = go-ingestor
 GO_BIN       = $(GO_DIR)/ingestor
-CORPUS       ?= ./data/test_corpus
+CORPUS       ?= ./Testing Set
 OLLAMA_MODEL ?= mistral
 
 # Build Go ingestor binary
 build:
-	cd $(GO_DIR) && go build -o ingestor .
+	cd $(GO_DIR) && CGO_LDFLAGS="-L$(CURDIR)/$(GO_DIR)/lib" go build -o ingestor .
 
 # Fast ingestion (Go parse/chunk + Python embed/index)
 ingest-fast: build
-	FAST_INGEST=1 python pipeline.py ingest $(CORPUS)
+	FAST_INGEST=1 python pipeline.py ingest "$(CORPUS)"
 
 # Original Python-only ingestion (fallback)
 ingest:
-	python pipeline.py ingest $(CORPUS)
+	python pipeline.py ingest "$(CORPUS)"
 
 # Run fast_ingest.py standalone
 ingest-standalone: build
-	python fast_ingest.py $(CORPUS)
+	python fast_ingest.py "$(CORPUS)"
 
 # Query phase
 query:
@@ -48,8 +48,12 @@ setup:
 	ollama pull $(OLLAMA_MODEL)
 	docker run -d --name lucio_qdrant -p 6333:6333 -p 6334:6334 \
 		-v qdrant_data:/qdrant/storage qdrant/qdrant:latest || true
-	cd $(GO_DIR) && go build -o ingestor .
+	cd $(GO_DIR) && CGO_LDFLAGS="-L$(CURDIR)/$(GO_DIR)/lib" go build -o ingestor .
 
 # Run e2e test (assumes make setup was run)
 e2e: build
 	python run_e2e_test.py --ingest
+
+# Run ingestion only and print benchmarks
+bench: build
+	python fast_ingest.py "$(CORPUS)"
