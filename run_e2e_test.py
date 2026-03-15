@@ -141,7 +141,7 @@ async def run_e2e():
     for i, (q, a) in enumerate(zip(gt, answers)):
         generated = str(a.answer) if not isinstance(a.answer, (list, tuple)) else " ".join(map(str, a.answer))
         expected = str(q["expected_answer"]) if not isinstance(q["expected_answer"], (list, tuple)) else " ".join(map(str, q["expected_answer"]))
-        doc_names = a.doc_names if hasattr(a, "doc_names") else []
+        doc_names = [c["document_id"] for c in a.citations] if hasattr(a, "citations") else []
         doc_name_str = ", ".join(doc_names) if doc_names else ""
 
         fuzzy = fuzzy_similarity(generated, expected)
@@ -172,7 +172,7 @@ async def run_e2e():
         print(f"{'─'*70}")
         print(f"  Expected : {r['expected'][:200]}{'...' if len(r['expected']) > 200 else ''}")
         print(f"  Generated: {r['generated'][:200]}{'...' if len(r['generated']) > 200 else ''}")
-        docs_str = ", ".join(r["doc_names"]) if r["doc_names"] else "None"
+        docs_str = ", ".join([c["document_id"] for c in r.get("citations", [])]) if [c["document_id"] for c in r.get("citations", [])] else "None"
         print(f"  Doc      : {docs_str} (match: {'YES' if r['doc_match'] >= 0.8 else 'NO'})")
         print(f"  Confidence: {r['confidence']}")
         print(f"  Chunks   : {r['chunks_retrieved']} retrieved")

@@ -131,7 +131,7 @@ async def ingest(doc_dir: str) -> dict:
 
 # ── PHASE 2: Query ────────────────────────────────────────────────────────────
 
-async def query(questions: list[str]) -> list[dict]:
+async def query(questions: list[str]) -> dict:
     """
     Full query pipeline — this is what runs inside the 30-second window.
 
@@ -163,13 +163,11 @@ async def query(questions: list[str]) -> list[dict]:
 
     # 3. Format for submission
     results = []
-    for q, a in zip(questions, answers):
+    for i, a in enumerate(answers, 1):
         results.append({
-            "question":     a.question,
+            "question_id":  i,
             "answer":       a.answer,
-            "doc_name":     a.doc_name,
-            "page_numbers": a.page_numbers,
-            "confidence":   a.confidence,
+            "citations":    a.citations,
         })
 
     t_total_s = round(time.perf_counter() - t_total, 2)
@@ -185,7 +183,7 @@ async def query(questions: list[str]) -> list[dict]:
         print(f"  ⚠️  OVER BUDGET by {t_total_s - 30:.1f}s — optimise!")
     print(f"{'='*60}\n")
 
-    return results
+    return {"answers": results}
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

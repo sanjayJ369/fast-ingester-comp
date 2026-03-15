@@ -30,8 +30,7 @@ from config import (
 class Answer:
     question:     str
     answer:       str
-    doc_names:    list[str]
-    page_numbers: list[int]
+    citations:    list[dict]
     confidence:   str = "high"
     chunks_used:  list[str] = field(default_factory=list)
 
@@ -44,8 +43,9 @@ using ONLY the provided context chunks. Be concise and factual.
 Always respond in this exact JSON format:
 {
   "answer": "<your answer here>",
-  "doc_names": ["<filename of relevant source document 1>", "<filename 2 (if multiple)>"],
-  "page_numbers": [<list of page numbers cited, e.g. 1, 3>],
+  "citations": [
+    {"document_id": "<filename of relevant source document>", "page": <page number cited>}
+  ],
   "confidence": "<high|medium|low>"
 }
 
@@ -53,7 +53,7 @@ Rules:
 - If the answer is not in the context, set answer to "NOT_FOUND" and confidence to "low"
 - Keep answers concise — 1-3 sentences max
 - Only cite page numbers that directly support the answer
-- doc_names must exactly match the provided filenames in the context"""
+- document_id must exactly match the provided filenames in the context"""
 
 
 def _build_user_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
@@ -84,15 +84,12 @@ def _parse_llm_response(raw: str, question: str, chunks: list[RetrievedChunk]) -
         else:
             ans = str(ans)
 
-        docs = parsed.get("doc_names") or parsed.get("doc_name", [])
-        if isinstance(docs, str):
-            docs = [docs]
+        citations = parsed.get("citations", [])
         
         return Answer(
             question=question,
             answer=ans,
-            doc_names=[str(d) for d in docs if d],
-            page_numbers=parsed.get("page_numbers", []),
+            citations=citations,
             confidence=parsed.get("confidence", "low"),
             chunks_used=[c.chunk_id for c in chunks],
         )
@@ -101,8 +98,7 @@ def _parse_llm_response(raw: str, question: str, chunks: list[RetrievedChunk]) -
         return Answer(
             question=question,
             answer="PARSE_ERROR",
-            doc_names=[chunks[0].filename] if chunks else [],
-            page_numbers=[chunks[0].page_num] if chunks else [],
+            citations=[{"document_id": chunks[0].filename, "page": chunks[0].page_num}] if chunks else [],
             confidence="low",
         )
 
@@ -124,8 +120,8 @@ class OllamaBackend:
         self, question: str, chunks: list[RetrievedChunk]
     ) -> Answer:
         if not chunks:
-            return Answer(question=question, answer="NOT_FOUND", doc_names=[],
-                          page_numbers=[], confidence="low")
+            return Answer(question=question, answer="NOT_FOUND", citations=[],
+                          confidence="low")
 
         session = await self._get_session()
         payload = {
@@ -150,8 +146,8 @@ class OllamaBackend:
                 return _parse_llm_response(raw, question, chunks)
         except Exception as e:
             print(f"[ANSWERER] Ollama error: {e}")
-            return Answer(question=question, answer="LLM_ERROR", doc_names=[],
-                          page_numbers=[], confidence="low")
+            return Answer(question=question, answer="LLM_ERROR", citations=[],
+                          confidence="low")
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -169,8 +165,8 @@ class AnthropicBackend:
         self, question: str, chunks: list[RetrievedChunk]
     ) -> Answer:
         if not chunks:
-            return Answer(question=question, answer="NOT_FOUND", doc_names=[],
-                          page_numbers=[], confidence="low")
+            return Answer(question=question, answer="NOT_FOUND", citations=[],
+                          confidence="low")
 
         try:
             response = await self.client.messages.create(
@@ -185,8 +181,8 @@ class AnthropicBackend:
 
         except Exception as e:
             print(f"[ANSWERER] Anthropic error: {e}")
-            return Answer(question=question, answer="API_ERROR", doc_names=[],
-                          page_numbers=[], confidence="low")
+            return Answer(question=question, answer="API_ERROR", citations=[],
+                          confidence="low")
 
     async def close(self):
         pass
