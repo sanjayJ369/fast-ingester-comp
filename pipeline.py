@@ -50,8 +50,8 @@ async def ingest(doc_dir: str) -> dict:
     """
     import os
     if os.getenv("FAST_INGEST", "0") == "1":
-        from fast_ingest import fast_ingest
-        return fast_ingest(doc_dir)
+        from fast_ingest import fast_ingest_stream
+        return fast_ingest_stream(doc_dir)
     t_total = time.perf_counter()
     timings = {}
 
