@@ -1,0 +1,17 @@
+cd go-ingestor && CGO_LDFLAGS="-L/root/fast-ingester-comp/go-ingestor/lib" go build -buildvcs=false -o ingestor .
+==> Running e2e with FAISS GPU backend (STREAMING)...
+VECTOR_BACKEND=faiss STREAMING_ENABLED=1 python3 run_e2e_test.py --ingest
+/root/fast-ingester-comp/fast_ingest.py:159: RuntimeWarning: coroutine 'StreamReader.read' was never awaited
+  fut = asyncio.run_coroutine_threadsafe(self.reader.read(n), asyncio.get_event_loop())
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+Traceback (most recent call last):
+  File "/root/fast-ingester-comp/fast_ingest.py", line 93, in _read_stream
+    with pa.ipc.open_stream(self.stream_file) as stream_reader:
+  File "/usr/local/lib/python3.10/dist-packages/pyarrow/ipc.py", line 187, in open_stream
+    return RecordBatchStreamReader(source, options=options,
+  File "/usr/local/lib/python3.10/dist-packages/pyarrow/ipc.py", line 52, in __init__
+    self._open(source, options=options, memory_pool=memory_pool)
+  File "pyarrow/ipc.pxi", line 1092, in pyarrow.lib._RecordBatchStreamReader._open
+  File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+pyarrow.lib.ArrowInvalid: Tried reading schema message, was null or length 0

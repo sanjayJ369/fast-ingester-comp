@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"os"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,7 @@ func ParseToChannel(path string, pages chan<- pipeline.PageResult, wg *sync.Wait
 
 	doc, err := parseNonPDF(path, ext)
 	if err != nil {
-		fmt.Printf("[GO] Warning: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[GO] Warning: %v\n", err)
 		return
 	}
 

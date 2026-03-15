@@ -67,6 +67,84 @@ def _ensure_collection(client: QdrantClient, name: str, dim: int):
     )
 
 
+class StreamingIndexer:
+    """
+    Stateful indexer that supports batch appends during streaming ingestion.
+    Finalizes all artifacts (BM25, Cluster Map, FAISS meta) at the end.
+    """
+
+    def __init__(self, vector_backend: str = "qdrant"):
+        self.vector_backend = vector_backend
+        self.all_chunks: list[Chunk] = []
+        self.all_full_vecs: list[np.ndarray] = []
+        self.all_coarse_vecs: list[np.ndarray] = []
+
+        if self.vector_backend == "qdrant":
+            self.client = get_qdrant()
+            _ensure_collection(self.client, QDRANT_COLLECTION_FULL, EMBED_DIM_FULL)
+            _ensure_collection(self.client, QDRANT_COLLECTION_COARSE, EMBED_DIM_COARSE)
+        else:
+            # FAISS: we'll build the indices in-memory and write to disk at the end
+            # for Phase 1. True append-to-disk FAISS is complex.
+            self.faiss = _get_faiss()
+
+    def append_batch(self, chunks: list[Chunk], full_vecs: np.ndarray, coarse_vecs: np.ndarray):
+        """Add a batch of embedded chunks to the vector index and local cache."""
+        start_idx = len(self.all_chunks)
+        self.all_chunks.extend(chunks)
+        self.all_full_vecs.append(full_vecs)
+        self.all_coarse_vecs.append(coarse_vecs)
+
+        if self.vector_backend == "qdrant":
+            for coll_name, vecs in [
+                (QDRANT_COLLECTION_FULL,   full_vecs),
+                (QDRANT_COLLECTION_COARSE, coarse_vecs),
+            ]:
+                points = [
+                    PointStruct(
+                        id=start_idx + idx,
+                        vector=vec.tolist(),
+                        payload={
+                            "chunk_id":  c.chunk_id,
+                            "doc_id":    c.doc_id,
+                            "filename":  c.filename,
+                            "text":      c.text,
+                            "page_num":  c.page_num,
+                            "chunk_idx": c.chunk_idx,
+                        },
+                    )
+                    for idx, (c, vec) in enumerate(zip(chunks, vecs))
+                ]
+                self.client.upsert(collection_name=coll_name, points=points)
+
+    def finalize(self):
+        """Build BM25, Cluster Map, and finalize FAISS indices from accumulated data."""
+        if not self.all_chunks:
+            print("[INDEXER] No chunks to finalize.")
+            return
+
+        full_vecs = np.vstack(self.all_full_vecs)
+        coarse_vecs = np.vstack(self.all_coarse_vecs)
+
+        print(f"[INDEXER] Finalizing {len(self.all_chunks)} chunks...")
+
+        # 1. FAISS (if selected)
+        if self.vector_backend == "faiss":
+            index_faiss(self.all_chunks, full_vecs, coarse_vecs)
+
+        # 2. BM25
+        index_bm25(self.all_chunks)
+
+        # 3. Cluster Map
+        kmeans, cluster_data = build_cluster_map(self.all_chunks, coarse_vecs)
+        # centroids already saved in build_cluster_map for consistency
+        
+        # 4. Chunk cache
+        save_chunks(self.all_chunks)
+
+        print("[INDEXER] ✅ All ingestion artifacts finalized.")
+
+
 def index_qdrant(
     chunks: list[Chunk],
     full_vecs: np.ndarray,

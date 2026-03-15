@@ -9,7 +9,7 @@ type PageResult struct {
 	Text     string
 }
 
-// RawChunk is emitted by chunker workers into the chunks channel.
+// RawChunk is emitted by chunker workers.
 // Has no final chunk_id yet — IDs are assigned by the collector after sorting.
 type RawChunk struct {
 	DocID     string
@@ -17,4 +17,13 @@ type RawChunk struct {
 	PageNum   int // from the source page
 	Text      string
 	PageOrder int // ordering within this page's chunks (0, 1, 2, ...)
+}
+
+// PageChunks is a set of all chunks belonging to a single page.
+// Emitting this ensures the sequencer gets an atomic page.
+type PageChunks struct {
+	DocID    string
+	Filename string
+	PageNum  int
+	Chunks   []RawChunk
 }

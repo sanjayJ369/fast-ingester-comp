@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"os"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -65,10 +66,10 @@ func ParsePDFToChannel(path string, pages chan<- pipeline.PageResult, wg *sync.W
 	totalPages, err := getPDFPageCount(path)
 	if err != nil {
 		// Fallback: single pdftotext call for the whole file
-		fmt.Printf("[GO-PDF] Warning: can't get page count for %s, using single pass: %v\n", base, err)
+		fmt.Fprintf(os.Stderr, "[GO-PDF] Warning: can't get page count for %s, using single pass: %v\n", base, err)
 		allPages, err := pdfExtractRange(path, 1, 999999)
 		if err != nil {
-			fmt.Printf("[GO-PDF] Error parsing %s: %v\n", base, err)
+			fmt.Fprintf(os.Stderr, "[GO-PDF] Error parsing %s: %v\n", base, err)
 			return
 		}
 		for i, text := range allPages {
@@ -82,7 +83,7 @@ func ParsePDFToChannel(path string, pages chan<- pipeline.PageResult, wg *sync.W
 		return
 	}
 
-	fmt.Printf("[GO-PDF] %s: %d pages, splitting across %d workers\n",
+	fmt.Fprintf(os.Stderr, "[GO-PDF] %s: %d pages, splitting across %d workers\n",
 		base, totalPages, (totalPages+pagesPerWorker-1)/pagesPerWorker)
 
 	// Split into ranges and process each in its own goroutine
@@ -99,7 +100,7 @@ func ParsePDFToChannel(path string, pages chan<- pipeline.PageResult, wg *sync.W
 
 			extracted, err := pdfExtractRange(path, first, last)
 			if err != nil {
-				fmt.Printf("[GO-PDF] Error on %s pages %d-%d: %v\n", base, first, last, err)
+				fmt.Fprintf(os.Stderr, "[GO-PDF] Error on %s pages %d-%d: %v\n", base, first, last, err)
 				return
 			}
 

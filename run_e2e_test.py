@@ -98,7 +98,7 @@ async def run_e2e():
         print("=" * 70)
         print("  PHASE 1: INGESTION (Go fast path)")
         print("=" * 70)
-        timings = fast_ingest("./Testing Set")
+        timings = await fast_ingest("./Testing Set")
         print(f"\nIngestion timings: {timings}\n")
 
     # Load ground truth

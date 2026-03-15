@@ -1,4 +1,4 @@
-.PHONY: build clean ingest ingest-fast query test setup fix-gpu e2e bench bench-faiss e2e-faiss
+.PHONY: build clean ingest ingest-fast ingest-stream query test setup fix-gpu e2e bench bench-faiss e2e-faiss e2e-stream-faiss
 
 GO_DIR       = go-ingestor
 GO_BIN       = $(GO_DIR)/ingestor
@@ -9,11 +9,15 @@ OLLAMA_MODEL ?= mistral
 
 # Build Go ingestor binary
 build:
-	cd $(GO_DIR) && CGO_LDFLAGS="-L$(CURDIR)/$(GO_DIR)/lib" go build -o ingestor .
+	cd $(GO_DIR) && CGO_LDFLAGS="-L$(CURDIR)/$(GO_DIR)/lib" go build -buildvcs=false -o ingestor .
 
 # Fast ingestion (Go parse/chunk + Python embed/index)
 ingest-fast: build
 	FAST_INGEST=1 $(PYTHON) pipeline.py ingest "$(CORPUS)"
+
+# Streaming ingestion (Go parse/chunk -> UDS -> Python embed/index)
+ingest-stream: build
+	FAST_INGEST=1 STREAMING_ENABLED=1 $(PYTHON) pipeline.py ingest "$(CORPUS)"
 
 # Original Python-only ingestion (fallback)
 ingest:
@@ -98,3 +102,8 @@ bench-faiss: build
 e2e-faiss: build
 	@echo "==> Running e2e with FAISS GPU backend..."
 	VECTOR_BACKEND=faiss $(PYTHON) run_e2e_test.py --ingest
+
+# GPU benchmark: FAISS backend full e2e with streaming
+e2e-stream-faiss: build
+	@echo "==> Running e2e with FAISS GPU backend (STREAMING)..."
+	VECTOR_BACKEND=faiss STREAMING_ENABLED=1 $(PYTHON) run_e2e_test.py --ingest

@@ -2,6 +2,7 @@ package chunker
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -19,9 +20,9 @@ type Chunk struct {
 }
 
 // RunChunkerPool starts numWorkers goroutines that consume PageResults from
-// the pages channel, chunk each page, and emit RawChunks into the chunks channel.
+// the pages channel, chunk each page, and emit PageChunks into the channel.
 // Closes the chunks channel when all workers are done.
-func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageResult, chunks chan<- pipeline.RawChunk) {
+func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageResult, chunks chan<- pipeline.PageChunks) {
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
@@ -32,17 +33,26 @@ func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageRes
 					continue
 				}
 				splits := splitText(page.Text, size, overlap)
+				var pageChunks []pipeline.RawChunk
 				for order, s := range splits {
 					trimmed := strings.TrimSpace(s)
 					if trimmed == "" {
 						continue
 					}
-					chunks <- pipeline.RawChunk{
+					pageChunks = append(pageChunks, pipeline.RawChunk{
 						DocID:     page.DocID,
 						Filename:  page.Filename,
 						PageNum:   page.PageNum,
 						Text:      trimmed,
 						PageOrder: order,
+					})
+				}
+				if len(pageChunks) > 0 {
+					chunks <- pipeline.PageChunks{
+						DocID:    page.DocID,
+						Filename: page.Filename,
+						PageNum:  page.PageNum,
+						Chunks:   pageChunks,
 					}
 				}
 			}
@@ -52,41 +62,41 @@ func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageRes
 	close(chunks)
 }
 
-// AssignChunkIDs takes collected raw chunks, sorts by (doc_id, page_num, page_order),
+// AssignChunkIDs takes collected page chunks, sorts by (doc_id, page_num),
 // and assigns sequential chunk_idx per document. Returns final Chunk slice.
-func AssignChunkIDs(raw []pipeline.RawChunk) []Chunk {
-	// Group by doc_id, preserving page ordering
-	type docChunks struct {
-		chunks []pipeline.RawChunk
-	}
-	docs := make(map[string]*docChunks)
-	docOrder := []string{} // preserve insertion order
+func AssignChunkIDs(rawPages []pipeline.PageChunks) []Chunk {
+	// Group by doc_id
+	docs := make(map[string][]pipeline.PageChunks)
+	var docOrder []string
 
-	for _, r := range raw {
-		dc, ok := docs[r.DocID]
-		if !ok {
-			dc = &docChunks{}
-			docs[r.DocID] = dc
-			docOrder = append(docOrder, r.DocID)
+	for _, rp := range rawPages {
+		if _, ok := docs[rp.DocID]; !ok {
+			docOrder = append(docOrder, rp.DocID)
 		}
-		dc.chunks = append(dc.chunks, r)
+		docs[rp.DocID] = append(docs[rp.DocID], rp)
 	}
 
-	// Sort each doc's chunks by (page_num, page_order) and assign IDs
 	var result []Chunk
 	for _, docID := range docOrder {
-		dc := docs[docID]
-		sortRawChunks(dc.chunks)
+		pages := docs[docID]
+		// Sort pages by PageNum
+		sort.Slice(pages, func(i, j int) bool {
+			return pages[i].PageNum < pages[j].PageNum
+		})
 
-		for i, r := range dc.chunks {
-			result = append(result, Chunk{
-				ChunkID:  fmt.Sprintf("%s__chunk_%d", r.DocID, i),
-				DocID:    r.DocID,
-				Filename: r.Filename,
-				Text:     r.Text,
-				PageNum:  int32(r.PageNum),
-				ChunkIdx: int32(i),
-			})
+		chunkIdx := 0
+		for _, p := range pages {
+			for _, rc := range p.Chunks {
+				result = append(result, Chunk{
+					ChunkID:  fmt.Sprintf("%s__chunk_%d", rc.DocID, chunkIdx),
+					DocID:    rc.DocID,
+					Filename: rc.Filename,
+					Text:     rc.Text,
+					PageNum:  int32(rc.PageNum),
+					ChunkIdx: int32(chunkIdx),
+				})
+				chunkIdx++
+			}
 		}
 	}
 
