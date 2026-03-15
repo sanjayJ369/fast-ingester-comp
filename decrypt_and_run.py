@@ -50,15 +50,18 @@ async def main():
         print(f"❌ Error: ZIP file not found at {zip_path}")
         return
 
-    excel_path = input("Enter the path to the questions Excel file (e.g., questions.xlsx): ").strip()
-    if not os.path.exists(excel_path):
-        print(f"❌ Error: Excel file not found at {excel_path}")
+    questions_path = input("Enter the path to the questions file (e.g., questions.csv): ").strip()
+    if not os.path.exists(questions_path):
+        print(f"❌ Error: file not found at {questions_path}")
         return
 
-    # 1. Read Excel File
-    print("📊 Loading questions from Excel...")
+    # 1. Read File
+    print("📊 Loading questions...")
     try:
-        df = pd.read_excel(excel_path)
+        if questions_path.lower().endswith('.csv'):
+            df = pd.read_csv(questions_path)
+        else:
+            df = pd.read_excel(questions_path)
         # Ensure 'id' and 'questions'/'question' columns exist
         col_names = [c.lower() for c in df.columns]
         
