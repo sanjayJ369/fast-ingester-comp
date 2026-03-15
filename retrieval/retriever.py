@@ -3,14 +3,20 @@ retrieval/retriever.py — Two-stage hybrid retriever with cluster routing.
 
 Per question, the pipeline is:
 
-  1. Embed question (coarse 128-dim + full 768-dim)
+  1. Embed question (coarse 128-dim + full 384-dim)
   2. Route to nearest cluster(s) → restrict search space
   3. Stage 1A: Coarse 128-dim vector search → top COARSE_TOP_K candidates
   4. Stage 1B: BM25 keyword search → top BM25_TOP_K candidates
   5. Merge & deduplicate candidates from 1A + 1B
-  6. Stage 2: Full 768-dim cosine rerank on merged set → top FINAL_TOP_K
+  6. Stage 2: Full 384-dim cosine rerank on merged set → top FINAL_TOP_K
 
 All 15 questions run concurrently via asyncio.gather().
+
+Backend selection
+-----------------
+Set the VECTOR_BACKEND env var (or config.py constant) to:
+  "qdrant" (default) — uses Qdrant for stages 1A and 2.
+  "faiss"            — uses GPU FAISS for stage 1A; numpy dot-product for stage 2.
 """
 
 import asyncio
@@ -30,6 +36,8 @@ from config import (
     QDRANT_COLLECTION_FULL, QDRANT_COLLECTION_COARSE,
     COARSE_TOP_K, BM25_TOP_K, FINAL_TOP_K, CLUSTER_EXPAND,
     BM25_INDEX_PATH, CLUSTER_MAP_PATH, CHUNKS_PATH,
+    FAISS_COARSE_PATH, FAISS_FULL_PATH, FAISS_META_PATH,
+    VECTOR_BACKEND,
 )
 
 
@@ -51,6 +59,13 @@ _bm25:        BM25Okapi    | None = None
 _chunks:      list[Chunk]  | None = None
 _cluster_map: dict         | None = None
 
+# FAISS singletons — loaded once, GPU-placed, held for process lifetime
+_faiss_coarse = None
+_faiss_full   = None
+_faiss_meta:  dict | None = None  # {int_row_id: chunk_metadata_dict}
+_gpu_res      = None              # faiss.StandardGpuResources
+
+
 def _load_indexes():
     global _bm25, _chunks, _cluster_map
 
@@ -65,6 +80,34 @@ def _load_indexes():
     if _cluster_map is None:
         with open(CLUSTER_MAP_PATH, "r") as f:
             _cluster_map = json.load(f)
+
+
+def _load_faiss_indexes() -> None:
+    """Load FAISS indexes from disk and GPU-place them.  Called once per process."""
+    global _faiss_coarse, _faiss_full, _faiss_meta, _gpu_res
+
+    try:
+        import faiss  # noqa: PLC0415
+    except ImportError:
+        raise RuntimeError(
+            "FAISS is not installed.  "
+            "Set VECTOR_BACKEND=qdrant or install: pip install faiss-gpu-cu12"
+        ) from None
+
+    if _gpu_res is None:
+        _gpu_res = faiss.StandardGpuResources()
+
+    if _faiss_coarse is None:
+        cpu_idx = faiss.read_index(FAISS_COARSE_PATH)
+        _faiss_coarse = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
+
+    if _faiss_full is None:
+        cpu_idx = faiss.read_index(FAISS_FULL_PATH)
+        _faiss_full = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
+
+    if _faiss_meta is None:
+        with open(FAISS_META_PATH, "rb") as f:
+            _faiss_meta = pickle.load(f)
 
 
 # ── Cluster routing ───────────────────────────────────────────────────────────
@@ -99,12 +142,12 @@ def _get_candidate_doc_ids(
 
 # ── Stage 1A: Coarse vector search ────────────────────────────────────────────
 
-def _coarse_search(
+def _coarse_search_qdrant(
     client: QdrantClient,
     coarse_vec: np.ndarray,
     candidate_doc_ids: list[str] | None,
 ) -> list[dict]:
-    """Search 128-dim collection for top COARSE_TOP_K candidates."""
+    """Qdrant path: search 128-dim collection for top COARSE_TOP_K candidates."""
     search_filter = None
     if candidate_doc_ids:
         search_filter = Filter(
@@ -122,6 +165,46 @@ def _coarse_search(
         with_payload=True,
     )
     return [h.payload for h in result.points]
+
+
+def _coarse_search_faiss(
+    coarse_vec: np.ndarray,
+    candidate_doc_ids: list[str] | None,
+) -> list[dict]:
+    """
+    FAISS path: search 128-dim GPU index for top COARSE_TOP_K candidates.
+    Filters by doc_id after retrieval (FAISS has no payload filter).
+    """
+    _load_faiss_indexes()
+    vec = np.ascontiguousarray(coarse_vec, dtype=np.float32).reshape(1, -1)
+
+    # Fetch more than COARSE_TOP_K when filtering so we can trim afterwards.
+    k = COARSE_TOP_K * 4 if candidate_doc_ids else COARSE_TOP_K
+    _, indices = _faiss_coarse.search(vec, k)
+
+    candidate_set = set(candidate_doc_ids) if candidate_doc_ids else None
+    results: list[dict] = []
+    for row_id in indices[0]:
+        if row_id < 0:
+            continue  # FAISS pads with -1 when fewer than k results exist
+        meta = _faiss_meta[int(row_id)]
+        if candidate_set and meta["doc_id"] not in candidate_set:
+            continue
+        results.append(meta)
+        if len(results) == COARSE_TOP_K:
+            break
+    return results
+
+
+def _coarse_search(
+    client: QdrantClient,
+    coarse_vec: np.ndarray,
+    candidate_doc_ids: list[str] | None,
+) -> list[dict]:
+    """Dispatch coarse search to the active backend."""
+    if VECTOR_BACKEND == "faiss":
+        return _coarse_search_faiss(coarse_vec, candidate_doc_ids)
+    return _coarse_search_qdrant(client, coarse_vec, candidate_doc_ids)
 
 
 # ── Stage 1B: BM25 keyword search ─────────────────────────────────────────────

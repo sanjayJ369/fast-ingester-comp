@@ -52,6 +52,34 @@ services:
               count: all
               capabilities: [gpu]
 
+  # GPU FAISS benchmark service — file-based, does not need Qdrant
+  # Run with: docker compose --profile faiss up faiss-app
+  faiss-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: lucio_faiss_bench
+    depends_on:
+      - ollama
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - LLM_BACKEND=ollama
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-mistral}
+      - VECTOR_BACKEND=faiss
+    volumes:
+      - ./data:/app/data
+      - "./Testing Set:/app/Testing Set"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - faiss
+
 volumes:
   qdrant_data:
   ollama_data:

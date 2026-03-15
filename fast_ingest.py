@@ -111,9 +111,14 @@ def fast_ingest(doc_dir: str) -> dict:
 
     # 4. Qdrant indexing
     t0 = time.perf_counter()
-    index_qdrant(chunks, full_vecs, coarse_vecs)
+    from config import VECTOR_BACKEND
+    if VECTOR_BACKEND == "faiss":
+        from storage.indexer import index_faiss
+        index_faiss(chunks, full_vecs, coarse_vecs)
+    else:
+        index_qdrant(chunks, full_vecs, coarse_vecs)
     timings["qdrant_s"] = round(time.perf_counter() - t0, 2)
-    print(f"[FAST] Qdrant: {timings['qdrant_s']}s\n")
+    print(f"[FAST] Vector Index: {timings['qdrant_s']}s\n")
 
     # 5. BM25
     t0 = time.perf_counter()

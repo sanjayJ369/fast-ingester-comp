@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt einop
 RUN pip install --no-cache-dir --break-system-packages \
     torch --index-url https://download.pytorch.org/whl/cu124
 
+# GPU-only FAISS — NOT added to requirements.txt to keep CPU/dev environments clean
+RUN pip install --no-cache-dir --break-system-packages faiss-gpu-cu12
+
 # Pre-download embedding model at build time
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('Snowflake/snowflake-arctic-embed-xs')"
 

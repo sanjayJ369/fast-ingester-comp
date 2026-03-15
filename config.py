@@ -40,10 +40,15 @@ FINAL_TOP_K        = 5      # stage 2: reranked chunks sent to LLM
 N_CLUSTERS         = 15     # one cluster per question (heuristic)
 CLUSTER_EXPAND     = 2      # also query N nearest clusters for safety
 
+# ── Vector backend ───────────────────────────────────────────────────────────
+# "qdrant" (default, all environments)
+# "faiss"  (GPU benchmark path only — requires faiss-gpu-cu12)
+VECTOR_BACKEND = os.getenv("VECTOR_BACKEND", "qdrant")
+
 # ── Qdrant ────────────────────────────────────────────────────────────────────
 QDRANT_HOST              = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT              = 6333
-QDRANT_COLLECTION_FULL   = "lucio_full"     # 768-dim
+QDRANT_COLLECTION_FULL   = "lucio_full"     # 384-dim
 QDRANT_COLLECTION_COARSE = "lucio_coarse"   # 128-dim
 
 # ── Storage paths ─────────────────────────────────────────────────────────────
@@ -53,3 +58,8 @@ CLUSTER_MAP_PATH  = "./data/cluster_map.json"
 ADJ_GRAPH_PATH    = "./data/adjacency_graph.json"
 CHUNKS_PATH       = "./data/chunks.pkl"       # raw chunks cache
 ARROW_CHUNKS_PATH = "./data/chunks.arrow"     # Arrow IPC from Go ingestor
+
+# ── FAISS artifact paths (GPU benchmark path only) ────────────────────────────
+FAISS_COARSE_PATH = "./data/coarse.faiss"    # 128-dim IndexFlatIP on disk
+FAISS_FULL_PATH   = "./data/full.faiss"      # 384-dim IndexFlatIP on disk
+FAISS_META_PATH   = "./data/faiss_meta.pkl"  # {int_row_id: chunk_metadata_dict}

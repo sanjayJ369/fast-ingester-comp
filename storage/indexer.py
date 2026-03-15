@@ -2,11 +2,10 @@
 storage/indexer.py — Build and persist all indexes.
 
 Indexes built:
-  1. Qdrant collection (full 768-dim)     → precise reranking
+  1. Qdrant collection (full 384-dim)     → precise reranking
   2. Qdrant collection (coarse 128-dim)   → fast candidate retrieval
   3. BM25Okapi                            → keyword sparse retrieval
-  4. Cluster map + adjacency graph        → corpus-aware routing
-"""
+  4. Cluster map + adjacency graph        → corpus-aware routing"""
 
 import json
 import pickle
@@ -27,8 +26,21 @@ from config import (
     EMBED_DIM_FULL, EMBED_DIM_COARSE,
     N_CLUSTERS, CLUSTER_EXPAND,
     BM25_INDEX_PATH, CLUSTER_MAP_PATH, ADJ_GRAPH_PATH, CHUNKS_PATH,
+    FAISS_COARSE_PATH, FAISS_FULL_PATH, FAISS_META_PATH,
     DATA_DIR,
 )
+
+
+def _get_faiss():
+    """Lazy-import FAISS with a clear error if not installed."""
+    try:
+        import faiss  # noqa: PLC0415
+        return faiss
+    except ImportError:
+        raise RuntimeError(
+            "FAISS is not installed.  "
+            "Set VECTOR_BACKEND=qdrant or install: pip install faiss-gpu-cu12"
+        ) from None
 
 
 # ── Qdrant client singleton ───────────────────────────────────────────────────
@@ -68,8 +80,8 @@ def index_qdrant(
     BATCH = 256
 
     for coll_name, vecs, dim in [
-        (QDRANT_COLLECTION_FULL,   full_vecs,   EMBED_DIM_FULL),
-        (QDRANT_COLLECTION_COARSE, coarse_vecs, EMBED_DIM_COARSE),
+        (QDRANT_COLLECTION_FULL,   full_vecs,   EMBED_DIM_FULL),   # 384-dim
+        (QDRANT_COLLECTION_COARSE, coarse_vecs, EMBED_DIM_COARSE), # 128-dim
     ]:
         print(f"[QDRANT] Building {coll_name} ({dim}-dim)...")
         _ensure_collection(client, coll_name, dim)
@@ -195,3 +207,76 @@ def save_chunks(chunks: list[Chunk]) -> None:
 def load_chunks() -> list[Chunk]:
     with open(CHUNKS_PATH, "rb") as f:
         return pickle.load(f)
+
+
+# ── FAISS indexing (GPU benchmark path) ───────────────────────────────────────
+
+def index_faiss(
+    chunks: list[Chunk],
+    full_vecs: np.ndarray,
+    coarse_vecs: np.ndarray,
+) -> None:
+    """
+    Build and persist GPU FAISS indexes.
+
+    Strategy
+    --------
+    1. Build IndexFlatIP in CPU memory (portable on-disk format).
+    2. Temporarily move each index to GPU-0 for the build pass (add() on GPU
+       is faster for large corpora).
+    3. Move back to CPU and write to disk with faiss.write_index().
+    4. Persist a metadata map {row_id: chunk_metadata_dict} so retrieval can
+       reconstruct RetrievedChunk objects without re-loading Qdrant.
+
+    The saved artifact is a plain CPU index so it is portable across machines
+    and can be GPU-placed at load time in retriever.py.
+    """
+    faiss = _get_faiss()
+    Path(DATA_DIR).mkdir(exist_ok=True)
+
+    # GPU resource — one object, reused for both indexes.
+    res = faiss.StandardGpuResources()
+
+    for name, vecs, dim, out_path in [
+        ("coarse", coarse_vecs, EMBED_DIM_COARSE, FAISS_COARSE_PATH),
+        ("full",   full_vecs,   EMBED_DIM_FULL,   FAISS_FULL_PATH),
+    ]:
+        print(f"[FAISS] Building {name} index ({dim}-dim, {len(chunks)} vectors)...")
+
+        # Input must be float32 and L2-normalised (for IP ≈ cosine similarity)
+        arr = np.ascontiguousarray(vecs, dtype=np.float32)
+        faiss.normalize_L2(arr)
+
+        # CPU index
+        cpu_index = faiss.IndexFlatIP(dim)
+
+        # GPU-place for the add() call, then move back to CPU
+        gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+        gpu_index.add(arr)
+        cpu_index = faiss.index_gpu_to_cpu(gpu_index)
+
+        faiss.write_index(cpu_index, out_path)
+        print(f"[FAISS] ✅ {name} index → {out_path}  ({cpu_index.ntotal} vectors)")
+
+    # Metadata map: int row_id → {chunk_id, doc_id, filename, text, page_num}
+    meta: dict[int, dict] = {
+        i: {
+            "chunk_id": c.chunk_id,
+            "doc_id":   c.doc_id,
+            "filename": c.filename,
+            "text":     c.text,
+            "page_num": c.page_num,
+        }
+        for i, c in enumerate(chunks)
+    }
+    with open(FAISS_META_PATH, "wb") as f:
+        pickle.dump(meta, f)
+    print(f"[FAISS] ✅ Metadata map → {FAISS_META_PATH}  ({len(meta)} entries)")
+
+    # Integrity check: row count must match across both indexes and meta.
+    coarse_n = faiss.read_index(FAISS_COARSE_PATH).ntotal
+    full_n   = faiss.read_index(FAISS_FULL_PATH).ntotal
+    assert coarse_n == full_n == len(meta), (
+        f"FAISS integrity error: coarse={coarse_n}, full={full_n}, meta={len(meta)}"
+    )
+    print(f"[FAISS] ✅ Integrity check passed ({len(meta)} rows)")

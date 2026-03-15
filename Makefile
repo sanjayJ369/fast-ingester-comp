@@ -1,4 +1,4 @@
-.PHONY: build clean ingest ingest-fast query test setup fix-gpu e2e bench
+.PHONY: build clean ingest ingest-fast query test setup fix-gpu e2e bench bench-faiss e2e-faiss
 
 GO_DIR       = go-ingestor
 GO_BIN       = $(GO_DIR)/ingestor
@@ -53,6 +53,8 @@ setup:
 	@echo "==> Installing Python dependencies (torch first for CUDA)..."
 	$(PIP) install torch --index-url https://download.pytorch.org/whl/cu124
 	$(PIP) install -r requirements.txt einops
+	@echo "==> Installing GPU-only FAISS (not in requirements.txt)..."
+	$(PIP) install faiss-gpu-cu12
 	@echo "==> Installing Ollama..."
 	curl -fsSL https://ollama.com/install.sh | sh
 	ollama pull $(OLLAMA_MODEL)
@@ -86,3 +88,13 @@ e2e: build
 # Run ingestion only and print benchmarks
 bench: build
 	$(PYTHON) fast_ingest.py "$(CORPUS)"
+
+# GPU benchmark: FAISS backend ingestion only
+bench-faiss: build
+	@echo "==> Benchmarking FAISS GPU backend ingestion..."
+	VECTOR_BACKEND=faiss $(PYTHON) fast_ingest.py "$(CORPUS)"
+
+# GPU benchmark: FAISS backend full e2e
+e2e-faiss: build
+	@echo "==> Running e2e with FAISS GPU backend..."
+	VECTOR_BACKEND=faiss $(PYTHON) run_e2e_test.py --ingest
