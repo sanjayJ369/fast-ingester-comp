@@ -86,16 +86,17 @@ async def main():
     os.makedirs(extract_dir, exist_ok=True)
     
     print(f"🔓 Extracting {zip_path} to {extract_dir}...")
-    # Use subprocess unzip because the Python standard library zipfile module does 
-    # not natively support AES decryption properly without 3rd party packages
+    # Use 7z to extract the archive
+    # e: extract, -o: output directory, -p: password, -y: assume yes
     result = subprocess.run(
-        ["unzip", "-o", "-P", decryption_key, zip_path, "-d", extract_dir],
+        ["7z", "x", f"-p{decryption_key}", f"-o{extract_dir}", "-y", zip_path],
         capture_output=True,
         text=True
     )
     if result.returncode != 0:
-        print("❌ Failed to unzip. Decryption key might be incorrect or file is corrupted.")
+        print("❌ Failed to extract using 7z. Decryption key might be incorrect, file is corrupted, or 7z is not installed.")
         print("Logs:\n", result.stderr)
+        print("Stdout:\n", result.stdout)
         return
         
     print("✅ Extraction successful.")
