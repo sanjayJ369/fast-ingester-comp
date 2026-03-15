@@ -14,5 +14,4 @@ go-ingestor/lib/
 # ONNX models (download separately)
 models/
 
-# Testing Set (large PDFs, download separately)
-Testing Set/
+
