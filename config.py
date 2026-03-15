@@ -17,10 +17,10 @@ LLM_TEMPERATURE   = 0.0          # deterministic for factual QA
 
 # ── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "mistral")
+OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "qwen3.5:9b")
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
-EMBED_MODEL        = "Snowflake/snowflake-arctic-embed-xs"
+EMBED_MODEL        = "qwen3-embedding:8b"
 EMBED_DIM_FULL     = 384    # precise index
 EMBED_DIM_COARSE   = 128    # fast coarse index (truncation)
 EMBED_BATCH_SIZE   = 256    # chunks per batch — arctic-xs is tiny, crank it up
