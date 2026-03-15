@@ -13,5 +13,3 @@ go-ingestor/lib/
 
 # ONNX models (download separately)
 models/
-
-
