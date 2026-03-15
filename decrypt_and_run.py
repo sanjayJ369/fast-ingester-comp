@@ -45,12 +45,12 @@ def check_ollama_status():
 async def main():
     print("🚀 Initializing Decryption and Ingestion Pipeline")
     
-    zip_path = input("Enter the path to the encrypted ZIP file: ").strip()
+    zip_path = "hackathon_data.zip"
     if not os.path.exists(zip_path):
         print(f"❌ Error: ZIP file not found at {zip_path}")
         return
 
-    questions_path = input("Enter the path to the questions file (e.g., questions.csv): ").strip()
+    questions_path = "Hackathon Final Questions.csv"
     if not os.path.exists(questions_path):
         print(f"❌ Error: file not found at {questions_path}")
         return
@@ -63,10 +63,10 @@ async def main():
         else:
             df = pd.read_excel(questions_path)
         # Ensure 'id' and 'questions'/'question' columns exist
-        col_names = [c.lower() for c in df.columns]
+        col_names = [str(c).lower().strip() for c in df.columns]
         
-        id_col = next((c for c in df.columns if c.lower() == 'id'), None)
-        q_col = next((c for c in df.columns if c.lower() in ['questions', 'question']), None)
+        id_col = next((c for c in df.columns if str(c).lower().strip() == 'id'), None)
+        q_col = next((c for c in df.columns if str(c).lower().strip() in ['questions', 'question', 'query']), None)
 
         if not id_col or not q_col:
             raise ValueError(f"Could not find 'id' and 'questions' columns. Found: {list(df.columns)}")
@@ -82,7 +82,29 @@ async def main():
     check_ollama_status()
 
     # 3. Wait for Decryption Key
-    decryption_key = getpass.getpass("🔑 Enter decryption key for the ZIP file: ")
+    print("🔑 Fetching decryption key from API...")
+    decryption_key = None
+    while not decryption_key:
+        try:
+            pw_resp = requests.get(
+                "https://luciohackathon.purplewater-eec0a096.centralindia.azurecontainerapps.io/password", 
+                headers={"X-API-Key": API_KEY}, 
+                timeout=10
+            )
+            if pw_resp.status_code == 200:
+                try:
+                    data = pw_resp.json()
+                    decryption_key = data.get("password", data) if isinstance(data, dict) else data
+                except:
+                    decryption_key = pw_resp.text.strip().strip('"')
+                print("✅ Successfully retrieved decryption key.")
+                break
+            else:
+                print(f"⏳ Waiting for password (Status {pw_resp.status_code}). Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+        except Exception as e:
+            print(f"❌ Error fetching password: {e}. Retrying in 5 seconds...")
+            await asyncio.sleep(5)
 
     # 4. Decrypt and Extract
     extract_dir = "data/extracted_pdfs"
