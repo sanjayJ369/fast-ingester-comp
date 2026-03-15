@@ -234,8 +234,9 @@ def index_faiss(
     faiss = _get_faiss()
     Path(DATA_DIR).mkdir(exist_ok=True)
 
-    # GPU resource — one object, reused for both indexes.
-    res = faiss.StandardGpuResources()
+    # GPU resource — one object, reused for both indexes, or skip if CPU.
+    has_gpu = hasattr(faiss, "StandardGpuResources")
+    res = faiss.StandardGpuResources() if has_gpu else None
 
     for name, vecs, dim, out_path in [
         ("coarse", coarse_vecs, EMBED_DIM_COARSE, FAISS_COARSE_PATH),
@@ -250,10 +251,13 @@ def index_faiss(
         # CPU index
         cpu_index = faiss.IndexFlatIP(dim)
 
-        # GPU-place for the add() call, then move back to CPU
-        gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
-        gpu_index.add(arr)
-        cpu_index = faiss.index_gpu_to_cpu(gpu_index)
+        if has_gpu:
+            # GPU-place for the add() call, then move back to CPU
+            gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+            gpu_index.add(arr)
+            cpu_index = faiss.index_gpu_to_cpu(gpu_index)
+        else:
+            cpu_index.add(arr)
 
         faiss.write_index(cpu_index, out_path)
         print(f"[FAISS] ✅ {name} index → {out_path}  ({cpu_index.ntotal} vectors)")

@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -128,5 +129,68 @@ func WriteArrowIPC(chunks []chunker.Chunk, outPath string) error {
 	}
 
 	fmt.Printf("[GO-ARROW] Wrote %d chunks to %s\n", len(chunks), outPath)
+	return nil
+}
+
+// StreamArrowIPC stream writes chunks to an io.Writer without embeddings
+func StreamArrowIPC(chunks <-chan chunker.Chunk, w io.Writer) error {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "chunk_id", Type: arrow.BinaryTypes.String},
+		{Name: "doc_id", Type: arrow.BinaryTypes.String},
+		{Name: "filename", Type: arrow.BinaryTypes.String},
+		{Name: "text", Type: arrow.BinaryTypes.String},
+		{Name: "page_num", Type: arrow.PrimitiveTypes.Int32},
+		{Name: "chunk_idx", Type: arrow.PrimitiveTypes.Int32},
+	}, nil)
+
+	ipcWriter := ipc.NewWriter(w, ipc.WithSchema(schema))
+	defer ipcWriter.Close()
+
+	pool := memory.NewGoAllocator()
+	batchSize := 256
+	var batch []chunker.Chunk
+
+	writeBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		b := array.NewRecordBuilder(pool, schema)
+		defer b.Release()
+
+		for _, c := range batch {
+			b.Field(0).(*array.StringBuilder).Append(c.ChunkID)
+			b.Field(1).(*array.StringBuilder).Append(c.DocID)
+			b.Field(2).(*array.StringBuilder).Append(c.Filename)
+			b.Field(3).(*array.StringBuilder).Append(sanitizeUTF8(c.Text))
+			b.Field(4).(*array.Int32Builder).Append(c.PageNum)
+			b.Field(5).(*array.Int32Builder).Append(c.ChunkIdx)
+		}
+
+		rec := b.NewRecord()
+		defer rec.Release()
+
+		if err := ipcWriter.Write(rec); err != nil {
+			return err
+		}
+		batch = batch[:0] // reset for next batch
+		return nil
+	}
+
+	count := 0
+	for c := range chunks {
+		batch = append(batch, c)
+		count++
+		if len(batch) >= batchSize {
+			if err := writeBatch(); err != nil {
+				return fmt.Errorf("write stream record: %w", err)
+			}
+		}
+	}
+
+	if err := writeBatch(); err != nil {
+		return fmt.Errorf("write final stream record: %w", err)
+	}
+
+	fmt.Printf("[GO-ARROW] Streamed %d chunks\n", count)
 	return nil
 }

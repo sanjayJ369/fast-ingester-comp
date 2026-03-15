@@ -98,3 +98,8 @@ bench-faiss: build
 e2e-faiss: build
 	@echo "==> Running e2e with FAISS GPU backend..."
 	VECTOR_BACKEND=faiss $(PYTHON) run_e2e_test.py --ingest
+
+# GPU benchmark: FAISS backend full e2e stream
+e2e-stream-faiss: build
+	@echo "==> Running e2e stream with FAISS GPU backend..."
+	STREAMING_ENABLED=1 VECTOR_BACKEND=faiss $(PYTHON) run_e2e_test.py --ingest

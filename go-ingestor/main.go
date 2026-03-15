@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,16 +28,20 @@ func main() {
 	embedFlag := flag.Bool("embed", false, "Run ONNX embedding in Go")
 	modelDir := flag.String("model-dir", "./models/arctic-embed-xs-onnx", "Path to ONNX model directory")
 	onnxLib := flag.String("onnx-lib", "/opt/homebrew/lib/libonnxruntime.dylib", "Path to ONNX Runtime shared library")
+	socketPath := flag.String("socket-path", "", "Path to UNIX domain socket for streaming")
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [--embed] [--model-dir DIR] <corpus_dir> <output.arrow>\n", os.Args[0])
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [--socket-path PATH] [--embed] [--model-dir DIR] <corpus_dir> [output.arrow]\n", os.Args[0])
 		os.Exit(1)
 	}
 
 	corpusDir := args[0]
-	outPath := args[1]
+	outPath := "data/chunks.arrow"
+	if len(args) > 1 {
+		outPath = args[1]
+	}
 	numCPU := runtime.NumCPU()
 
 	t0 := time.Now()
@@ -51,7 +56,7 @@ func main() {
 
 	// ── Pipeline channels ───────────────────────────────────────────────
 	pages := make(chan pipeline.PageResult, numCPU*4)
-	chunks := make(chan pipeline.RawChunk, numCPU*8)
+	chunks := make(chan chunker.Chunk, numCPU*8)
 
 	// ── Stage 1: PARSERS ────────────────────────────────────────────────
 	var parseWg sync.WaitGroup
@@ -71,65 +76,75 @@ func main() {
 	// ── Stage 2: CHUNKER POOL ───────────────────────────────────────────
 	go chunker.RunChunkerPool(numCPU, chunkSize, chunkOverlap, pages, chunks)
 
-	// ── Stage 3: COLLECTOR ──────────────────────────────────────────────
-	var rawChunks []pipeline.RawChunk
-	for rc := range chunks {
-		rawChunks = append(rawChunks, rc)
-	}
-
-	tPipelineDone := time.Since(t0)
-	fmt.Printf("[GO] Pipeline done: %d raw chunks in %s\n",
-		len(rawChunks), tPipelineDone.Round(time.Millisecond))
-
-	// ── Stage 4: Assign IDs ─────────────────────────────────────────────
-	tAssign := time.Now()
-	finalChunks := chunker.AssignChunkIDs(rawChunks)
-	fmt.Printf("[GO] ID assignment: %d chunks in %s\n",
-		len(finalChunks), time.Since(tAssign).Round(time.Millisecond))
-
-	// ── Stage 5: Embed (optional) ───────────────────────────────────────
-	if *embedFlag {
-		tEmbed := time.Now()
-
-		tokenizerPath := filepath.Join(*modelDir, "tokenizer.json")
-		onnxModelPath := filepath.Join(*modelDir, "model.onnx")
-
-		emb, err := embedder.New(onnxModelPath, tokenizerPath, *onnxLib)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[GO] Error creating embedder: %v\n", err)
-			os.Exit(1)
-		}
-		defer emb.Close()
-
-		// Extract texts for embedding
-		texts := make([]string, len(finalChunks))
-		for i, c := range finalChunks {
-			texts[i] = c.Text
-		}
-
-		fmt.Printf("[GO-EMBED] Embedding %d chunks (batch=%d)...\n", len(texts), embedBatch)
-		embedResults, err := emb.EmbedBatchParallel(texts, embedBatch)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[GO] Embedding error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("[GO-EMBED] Done: %s\n", time.Since(tEmbed).Round(time.Millisecond))
-
-		// Write Arrow with embeddings
+	// ── Stage 3: WRITER / STREAMER ──────────────────────────────────────
+	if *socketPath != "" {
 		tArrow := time.Now()
-		if err := writer.WriteArrowIPCWithEmbeddings(finalChunks, embedResults, outPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[GO] Error writing Arrow: %v\n", err)
+		conn, err := net.Dial("unix", *socketPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[GO] Error connecting to socket: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("[GO] Arrow write: %s\n", time.Since(tArrow).Round(time.Millisecond))
+		defer conn.Close()
+
+		if err := writer.StreamArrowIPC(chunks, conn); err != nil {
+			fmt.Fprintf(os.Stderr, "[GO] Error streaming Arrow: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[GO] Stream write done: %s\n", time.Since(tArrow).Round(time.Millisecond))
 	} else {
-		// Write Arrow without embeddings (Python will embed)
-		tArrow := time.Now()
-		if err := writer.WriteArrowIPC(finalChunks, outPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[GO] Error writing Arrow: %v\n", err)
-			os.Exit(1)
+		// ── Stage 3b: COLLECTOR (Batch mode) ─────────────────────────────
+		var finalChunks []chunker.Chunk
+		for rc := range chunks {
+			finalChunks = append(finalChunks, rc)
 		}
-		fmt.Printf("[GO] Arrow write: %s\n", time.Since(tArrow).Round(time.Millisecond))
+
+		tPipelineDone := time.Since(t0)
+		fmt.Printf("[GO] Pipeline done: %d chunks in %s\n", len(finalChunks), tPipelineDone.Round(time.Millisecond))
+
+		// ── Stage 5: Embed (optional) ───────────────────────────────────────
+		if *embedFlag {
+			tEmbed := time.Now()
+
+			tokenizerPath := filepath.Join(*modelDir, "tokenizer.json")
+			onnxModelPath := filepath.Join(*modelDir, "model.onnx")
+
+			emb, err := embedder.New(onnxModelPath, tokenizerPath, *onnxLib)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[GO] Error creating embedder: %v\n", err)
+				os.Exit(1)
+			}
+			defer emb.Close()
+
+			// Extract texts for embedding
+			texts := make([]string, len(finalChunks))
+			for i, c := range finalChunks {
+				texts[i] = c.Text
+			}
+
+			fmt.Printf("[GO-EMBED] Embedding %d chunks (batch=%d)...\n", len(texts), embedBatch)
+			embedResults, err := emb.EmbedBatchParallel(texts, embedBatch)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[GO] Embedding error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("[GO-EMBED] Done: %s\n", time.Since(tEmbed).Round(time.Millisecond))
+
+			// Write Arrow with embeddings
+			tArrow := time.Now()
+			if err := writer.WriteArrowIPCWithEmbeddings(finalChunks, embedResults, outPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[GO] Error writing Arrow: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("[GO] Arrow write: %s\n", time.Since(tArrow).Round(time.Millisecond))
+		} else {
+			// Write Arrow without embeddings (Python will embed)
+			tArrow := time.Now()
+			if err := writer.WriteArrowIPC(finalChunks, outPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[GO] Error writing Arrow: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("[GO] Arrow write: %s\n", time.Since(tArrow).Round(time.Millisecond))
+		}
 	}
 
 	fmt.Printf("[GO] Total: %s\n", time.Since(t0).Round(time.Millisecond))

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jsanjay/go-ingestor/pipeline"
 )
@@ -19,10 +20,12 @@ type Chunk struct {
 }
 
 // RunChunkerPool starts numWorkers goroutines that consume PageResults from
-// the pages channel, chunk each page, and emit RawChunks into the chunks channel.
+// the pages channel, chunk each page, and emit Chunks into the chunks channel.
 // Closes the chunks channel when all workers are done.
-func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageResult, chunks chan<- pipeline.RawChunk) {
+func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageResult, chunks chan<- Chunk) {
 	var wg sync.WaitGroup
+	var globalIdx int32
+
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
@@ -32,17 +35,20 @@ func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageRes
 					continue
 				}
 				splits := splitText(page.Text, size, overlap)
-				for order, s := range splits {
+				for _, s := range splits {
 					trimmed := strings.TrimSpace(s)
 					if trimmed == "" {
 						continue
 					}
-					chunks <- pipeline.RawChunk{
-						DocID:     page.DocID,
-						Filename:  page.Filename,
-						PageNum:   page.PageNum,
-						Text:      trimmed,
-						PageOrder: order,
+
+					idx := atomic.AddInt32(&globalIdx, 1) - 1
+					chunks <- Chunk{
+						ChunkID:  fmt.Sprintf("%s__chunk_%d", page.DocID, idx),
+						DocID:    page.DocID,
+						Filename: page.Filename,
+						Text:     trimmed,
+						PageNum:  int32(page.PageNum),
+						ChunkIdx: idx,
 					}
 				}
 			}
@@ -50,68 +56,6 @@ func RunChunkerPool(numWorkers, size, overlap int, pages <-chan pipeline.PageRes
 	}
 	wg.Wait()
 	close(chunks)
-}
-
-// AssignChunkIDs takes collected raw chunks, sorts by (doc_id, page_num, page_order),
-// and assigns sequential chunk_idx per document. Returns final Chunk slice.
-func AssignChunkIDs(raw []pipeline.RawChunk) []Chunk {
-	// Group by doc_id, preserving page ordering
-	type docChunks struct {
-		chunks []pipeline.RawChunk
-	}
-	docs := make(map[string]*docChunks)
-	docOrder := []string{} // preserve insertion order
-
-	for _, r := range raw {
-		dc, ok := docs[r.DocID]
-		if !ok {
-			dc = &docChunks{}
-			docs[r.DocID] = dc
-			docOrder = append(docOrder, r.DocID)
-		}
-		dc.chunks = append(dc.chunks, r)
-	}
-
-	// Sort each doc's chunks by (page_num, page_order) and assign IDs
-	var result []Chunk
-	for _, docID := range docOrder {
-		dc := docs[docID]
-		sortRawChunks(dc.chunks)
-
-		for i, r := range dc.chunks {
-			result = append(result, Chunk{
-				ChunkID:  fmt.Sprintf("%s__chunk_%d", r.DocID, i),
-				DocID:    r.DocID,
-				Filename: r.Filename,
-				Text:     r.Text,
-				PageNum:  int32(r.PageNum),
-				ChunkIdx: int32(i),
-			})
-		}
-	}
-
-	return result
-}
-
-// sortRawChunks sorts by (PageNum, PageOrder) using a simple insertion sort
-// (stable, good for mostly-ordered data coming from channels).
-func sortRawChunks(chunks []pipeline.RawChunk) {
-	for i := 1; i < len(chunks); i++ {
-		key := chunks[i]
-		j := i - 1
-		for j >= 0 && less(key, chunks[j]) {
-			chunks[j+1] = chunks[j]
-			j--
-		}
-		chunks[j+1] = key
-	}
-}
-
-func less(a, b pipeline.RawChunk) bool {
-	if a.PageNum != b.PageNum {
-		return a.PageNum < b.PageNum
-	}
-	return a.PageOrder < b.PageOrder
 }
 
 // splitText is an exact port of _split_text from ingestion/chunker.py:29-53.
