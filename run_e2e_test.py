@@ -18,6 +18,7 @@ import asyncio
 import sys
 import time
 import json
+import os
 import numpy as np
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -112,6 +113,11 @@ async def run_e2e():
     print("\n[E2E] Loading embedding model...")
     get_model()
 
+    if "VECTOR_BACKEND" in os.environ and os.environ["VECTOR_BACKEND"] == "faiss":
+        from retrieval.retriever import _load_faiss_indexes
+        print("[E2E] Warming up FAISS GPU indexes...")
+        _load_faiss_indexes()
+
     # Retrieve
     t0 = time.perf_counter()
     print("[E2E] Retrieving chunks for all questions...")
@@ -133,19 +139,20 @@ async def run_e2e():
 
     results = []
     for i, (q, a) in enumerate(zip(gt, answers)):
-        generated = a.answer
-        expected = q["expected_answer"]
+        generated = str(a.answer) if not isinstance(a.answer, (list, tuple)) else " ".join(map(str, a.answer))
+        expected = str(q["expected_answer"]) if not isinstance(q["expected_answer"], (list, tuple)) else " ".join(map(str, q["expected_answer"]))
+        doc_name = str(a.doc_name) if not isinstance(a.doc_name, (list, tuple)) else (str(a.doc_name[0]) if a.doc_name else "")
 
         fuzzy = fuzzy_similarity(generated, expected)
         semantic = semantic_similarity(generated, expected)
-        doc_score = doc_match_score(a.doc_name, q["expected_docs"])
+        doc_score = doc_match_score(doc_name, q["expected_docs"])
 
         results.append({
             "idx": i + 1,
             "question": q["question"],
             "expected": expected,
             "generated": generated,
-            "doc_name": a.doc_name,
+            "doc_name": doc_name,
             "confidence": a.confidence,
             "fuzzy_sim": fuzzy,
             "semantic_sim": semantic,

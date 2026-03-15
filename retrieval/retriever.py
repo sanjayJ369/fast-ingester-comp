@@ -66,48 +66,54 @@ _faiss_meta:  dict | None = None  # {int_row_id: chunk_metadata_dict}
 _gpu_res      = None              # faiss.StandardGpuResources
 
 
+import threading
+
+_index_lock = threading.Lock()
+_faiss_lock = threading.Lock()
+
 def _load_indexes():
     global _bm25, _chunks, _cluster_map
+    with _index_lock:
+        if _bm25 is None:
+            with open(BM25_INDEX_PATH, "rb") as f:
+                _bm25 = pickle.load(f)
 
-    if _bm25 is None:
-        with open(BM25_INDEX_PATH, "rb") as f:
-            _bm25 = pickle.load(f)
+        if _chunks is None:
+            with open(CHUNKS_PATH, "rb") as f:
+                _chunks = pickle.load(f)
 
-    if _chunks is None:
-        with open(CHUNKS_PATH, "rb") as f:
-            _chunks = pickle.load(f)
-
-    if _cluster_map is None:
-        with open(CLUSTER_MAP_PATH, "r") as f:
-            _cluster_map = json.load(f)
+        if _cluster_map is None:
+            with open(CLUSTER_MAP_PATH, "r") as f:
+                _cluster_map = json.load(f)
 
 
 def _load_faiss_indexes() -> None:
     """Load FAISS indexes from disk and GPU-place them.  Called once per process."""
     global _faiss_coarse, _faiss_full, _faiss_meta, _gpu_res
 
-    try:
-        import faiss  # noqa: PLC0415
-    except ImportError:
-        raise RuntimeError(
-            "FAISS is not installed.  "
-            "Set VECTOR_BACKEND=qdrant or install: pip install faiss-gpu-cu12"
-        ) from None
+    with _faiss_lock:
+        try:
+            import faiss  # noqa: PLC0415
+        except ImportError:
+            raise RuntimeError(
+                "FAISS is not installed.  "
+                "Set VECTOR_BACKEND=qdrant or install: pip install faiss-gpu-cu12"
+            ) from None
 
-    if _gpu_res is None:
-        _gpu_res = faiss.StandardGpuResources()
+        if _gpu_res is None:
+            _gpu_res = faiss.StandardGpuResources()
 
-    if _faiss_coarse is None:
-        cpu_idx = faiss.read_index(FAISS_COARSE_PATH)
-        _faiss_coarse = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
+        if _faiss_coarse is None:
+            cpu_idx = faiss.read_index(FAISS_COARSE_PATH)
+            _faiss_coarse = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
 
-    if _faiss_full is None:
-        cpu_idx = faiss.read_index(FAISS_FULL_PATH)
-        _faiss_full = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
+        if _faiss_full is None:
+            cpu_idx = faiss.read_index(FAISS_FULL_PATH)
+            _faiss_full = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
 
-    if _faiss_meta is None:
-        with open(FAISS_META_PATH, "rb") as f:
-            _faiss_meta = pickle.load(f)
+        if _faiss_meta is None:
+            with open(FAISS_META_PATH, "rb") as f:
+                _faiss_meta = pickle.load(f)
 
 
 # ── Cluster routing ───────────────────────────────────────────────────────────

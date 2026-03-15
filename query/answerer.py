@@ -78,10 +78,21 @@ def _parse_llm_response(raw: str, question: str, chunks: list[RetrievedChunk]) -
         text = text.strip()
 
         parsed = json.loads(text)
+        ans = parsed.get("answer", "NOT_FOUND")
+        if isinstance(ans, list):
+            ans = " ".join(map(str, ans))
+        else:
+            ans = str(ans)
+
+        doc = parsed.get("doc_name", "")
+        if isinstance(doc, list):
+            doc = doc[0] if doc else ""
+        doc = str(doc)
+
         return Answer(
             question=question,
-            answer=parsed.get("answer", "NOT_FOUND"),
-            doc_name=parsed.get("doc_name", ""),
+            answer=ans,
+            doc_name=doc,
             page_numbers=parsed.get("page_numbers", []),
             confidence=parsed.get("confidence", "low"),
             chunks_used=[c.chunk_id for c in chunks],
