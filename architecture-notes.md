@@ -7,4 +7,4 @@
 architecture notes:
 - end point for injestion is fast_injest.py is being called by run_e2e_test.py
 - fast_injesty.py is calling go injestion 
-- 
+- chaned from quadrand to faiss when speeded up a bit

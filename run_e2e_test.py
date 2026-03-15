@@ -141,18 +141,19 @@ async def run_e2e():
     for i, (q, a) in enumerate(zip(gt, answers)):
         generated = str(a.answer) if not isinstance(a.answer, (list, tuple)) else " ".join(map(str, a.answer))
         expected = str(q["expected_answer"]) if not isinstance(q["expected_answer"], (list, tuple)) else " ".join(map(str, q["expected_answer"]))
-        doc_name = str(a.doc_name) if not isinstance(a.doc_name, (list, tuple)) else (str(a.doc_name[0]) if a.doc_name else "")
+        doc_names = a.doc_names if hasattr(a, "doc_names") else []
+        doc_name_str = ", ".join(doc_names) if doc_names else ""
 
         fuzzy = fuzzy_similarity(generated, expected)
         semantic = semantic_similarity(generated, expected)
-        doc_score = doc_match_score(doc_name, q["expected_docs"])
+        doc_score = doc_match_score(doc_name_str, q["expected_docs"])
 
         results.append({
             "idx": i + 1,
             "question": q["question"],
             "expected": expected,
             "generated": generated,
-            "doc_name": doc_name,
+            "doc_names": doc_names,
             "confidence": a.confidence,
             "fuzzy_sim": fuzzy,
             "semantic_sim": semantic,
@@ -171,7 +172,8 @@ async def run_e2e():
         print(f"{'─'*70}")
         print(f"  Expected : {r['expected'][:200]}{'...' if len(r['expected']) > 200 else ''}")
         print(f"  Generated: {r['generated'][:200]}{'...' if len(r['generated']) > 200 else ''}")
-        print(f"  Doc      : {r['doc_name']} (match: {'YES' if r['doc_match'] >= 0.8 else 'NO'})")
+        docs_str = ", ".join(r["doc_names"]) if r["doc_names"] else "None"
+        print(f"  Doc      : {docs_str} (match: {'YES' if r['doc_match'] >= 0.8 else 'NO'})")
         print(f"  Confidence: {r['confidence']}")
         print(f"  Chunks   : {r['chunks_retrieved']} retrieved")
         print(f"  Fuzzy Sim: {r['fuzzy_sim']:.3f}")

@@ -30,7 +30,7 @@ from config import (
 class Answer:
     question:     str
     answer:       str
-    doc_name:     str
+    doc_names:    list[str]
     page_numbers: list[int]
     confidence:   str = "high"
     chunks_used:  list[str] = field(default_factory=list)
@@ -44,7 +44,7 @@ using ONLY the provided context chunks. Be concise and factual.
 Always respond in this exact JSON format:
 {
   "answer": "<your answer here>",
-  "doc_name": "<filename of the most relevant source document>",
+  "doc_names": ["<filename of relevant source document 1>", "<filename 2 (if multiple)>"],
   "page_numbers": [<list of page numbers cited, e.g. 1, 3>],
   "confidence": "<high|medium|low>"
 }
@@ -53,7 +53,7 @@ Rules:
 - If the answer is not in the context, set answer to "NOT_FOUND" and confidence to "low"
 - Keep answers concise — 1-3 sentences max
 - Only cite page numbers that directly support the answer
-- doc_name must exactly match one of the provided filenames"""
+- doc_names must exactly match the provided filenames in the context"""
 
 
 def _build_user_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
@@ -84,15 +84,14 @@ def _parse_llm_response(raw: str, question: str, chunks: list[RetrievedChunk]) -
         else:
             ans = str(ans)
 
-        doc = parsed.get("doc_name", "")
-        if isinstance(doc, list):
-            doc = doc[0] if doc else ""
-        doc = str(doc)
-
+        docs = parsed.get("doc_names") or parsed.get("doc_name", [])
+        if isinstance(docs, str):
+            docs = [docs]
+        
         return Answer(
             question=question,
             answer=ans,
-            doc_name=doc,
+            doc_names=[str(d) for d in docs if d],
             page_numbers=parsed.get("page_numbers", []),
             confidence=parsed.get("confidence", "low"),
             chunks_used=[c.chunk_id for c in chunks],
@@ -102,7 +101,7 @@ def _parse_llm_response(raw: str, question: str, chunks: list[RetrievedChunk]) -
         return Answer(
             question=question,
             answer="PARSE_ERROR",
-            doc_name=chunks[0].filename if chunks else "",
+            doc_names=[chunks[0].filename] if chunks else [],
             page_numbers=[chunks[0].page_num] if chunks else [],
             confidence="low",
         )
@@ -125,7 +124,7 @@ class OllamaBackend:
         self, question: str, chunks: list[RetrievedChunk]
     ) -> Answer:
         if not chunks:
-            return Answer(question=question, answer="NOT_FOUND", doc_name="",
+            return Answer(question=question, answer="NOT_FOUND", doc_names=[],
                           page_numbers=[], confidence="low")
 
         session = await self._get_session()
@@ -151,7 +150,7 @@ class OllamaBackend:
                 return _parse_llm_response(raw, question, chunks)
         except Exception as e:
             print(f"[ANSWERER] Ollama error: {e}")
-            return Answer(question=question, answer="LLM_ERROR", doc_name="",
+            return Answer(question=question, answer="LLM_ERROR", doc_names=[],
                           page_numbers=[], confidence="low")
 
     async def close(self):
@@ -170,7 +169,7 @@ class AnthropicBackend:
         self, question: str, chunks: list[RetrievedChunk]
     ) -> Answer:
         if not chunks:
-            return Answer(question=question, answer="NOT_FOUND", doc_name="",
+            return Answer(question=question, answer="NOT_FOUND", doc_names=[],
                           page_numbers=[], confidence="low")
 
         try:
@@ -186,7 +185,7 @@ class AnthropicBackend:
 
         except Exception as e:
             print(f"[ANSWERER] Anthropic error: {e}")
-            return Answer(question=question, answer="API_ERROR", doc_name="",
+            return Answer(question=question, answer="API_ERROR", doc_names=[],
                           page_numbers=[], confidence="low")
 
     async def close(self):
