@@ -17,15 +17,15 @@ LLM_TEMPERATURE   = 0.0          # deterministic for factual QA
 
 # ── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "qwen3.5:9b")
+OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "mistral-small:24b")
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
-EMBED_MODEL        = "qwen3-embedding:8b"
-EMBED_DIM_FULL     = 384    # precise index
-EMBED_DIM_COARSE   = 128    # fast coarse index (truncation)
-EMBED_BATCH_SIZE   = 256    # chunks per batch — arctic-xs is tiny, crank it up
+EMBED_MODEL        = "BAAI/bge-small-en-v1.5"
+EMBED_DIM_FULL     = 384     # BGE-small dimension
+EMBED_DIM_COARSE   = 384     # same for BGE-small
+EMBED_BATCH_SIZE   = 128     # small model, higher batch size
 EMBED_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-EMBED_DOC_PREFIX   = ""     # arctic-embed uses no doc prefix
+EMBED_DOC_PREFIX   = ""
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_SIZE         = 512    # characters

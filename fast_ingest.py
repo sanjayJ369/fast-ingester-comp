@@ -72,7 +72,7 @@ def fast_ingest_stream(doc_dir: str) -> dict:
         os.remove(uds_path)
 
     print(f"\n{'='*60}\n[STREAM] Streaming ingestion: {doc_dir}\n{'='*60}\n")
-    
+
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(uds_path)
     server.listen(1)
@@ -89,14 +89,14 @@ def fast_ingest_stream(doc_dir: str) -> dict:
     all_chunks = []
     all_full_vecs = []
     all_coarse_vecs = []
-    
+
     # 3. Stream Arrow batches & Embed
     with conn.makefile('rb') as f:
         reader = ipc.RecordBatchStreamReader(f)
         for batch in reader:
             batch_chunks = _arrow_batch_to_chunks(batch)
             if not batch_chunks: continue
-            
+
             # Embed batch
             f_vecs, c_vecs = embed_chunks(batch_chunks)
             all_chunks.extend(batch_chunks)
@@ -130,7 +130,7 @@ def fast_ingest_stream(doc_dir: str) -> dict:
     t0 = time.perf_counter()
     index_bm25(all_chunks)
     timings["bm25_s"] = round(time.perf_counter() - t0, 2)
-    
+
     t0 = time.perf_counter()
     kmeans, cluster_data = build_cluster_map(all_chunks, coarse_vecs)
     cluster_data["centroids"] = kmeans.cluster_centers_.tolist()
@@ -269,7 +269,7 @@ def fast_ingest(doc_dir: str) -> dict:
 if __name__ == "__main__":
     doc_dir = sys.argv[1] if len(sys.argv) > 1 else "./Testing Set"
     is_stream = os.environ.get("STREAMING_ENABLED", "0") == "1"
-    
+
     if is_stream:
         fast_ingest_stream(doc_dir)
     else:

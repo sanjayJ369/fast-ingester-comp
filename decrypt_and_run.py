@@ -6,6 +6,9 @@ import json
 import getpass
 from pathlib import Path
 
+# Query-only mode defaults to enabled so existing indexes can be reused.
+SKIP_INGEST = os.getenv("SKIP_INGEST", "1") == "1"
+
 try:
     import pandas as pd
     import requests
@@ -25,7 +28,7 @@ load_dotenv()
 
 API_KEY = os.getenv("LUCIO_API_KEY")
 TEAM_ID = os.getenv("LUCIO_TEAM_ID")
-SUBMISSION_URL = "https://luciohackathon.purplewater-eec0a096.centralindia.azurecontainerapps.io/teams/submissions"
+SUBMISSION_URL = "https://luciohackathon.purplewater-eec0a096.centralindia.azurecontainerapps.io/submissions"
 
 if not API_KEY or not TEAM_ID:
     print("⚠️  Warning: LUCIO_API_KEY or LUCIO_TEAM_ID not directly found in environment. Please check your .env file.")
@@ -44,7 +47,7 @@ def check_ollama_status():
 
 async def main():
     print("🚀 Initializing Decryption and Ingestion Pipeline")
-    
+
     zip_path = "hackathon_data.zip"
     if not os.path.exists(zip_path):
         print(f"❌ Error: ZIP file not found at {zip_path}")
@@ -64,7 +67,7 @@ async def main():
             df = pd.read_excel(questions_path)
         # Ensure 'id' and 'questions'/'question' columns exist
         col_names = [str(c).lower().strip() for c in df.columns]
-        
+
         id_col = next((c for c in df.columns if str(c).lower().strip() == 'id'), None)
         q_col = next((c for c in df.columns if str(c).lower().strip() in ['questions', 'question', 'query']), None)
 
@@ -81,64 +84,67 @@ async def main():
     # 2. Start / Validate Backend
     check_ollama_status()
 
-    # 3. Wait for Decryption Key
-    print("🔑 Fetching decryption key from API...")
-    decryption_key = None
-    while not decryption_key:
-        try:
-            pw_resp = requests.get(
-                "https://luciohackathon.purplewater-eec0a096.centralindia.azurecontainerapps.io/password", 
-                headers={"X-API-Key": API_KEY}, 
-                timeout=10
-            )
-            if pw_resp.status_code == 200:
-                try:
-                    data = pw_resp.json()
-                    decryption_key = data.get("password", data) if isinstance(data, dict) else data
-                except:
-                    decryption_key = pw_resp.text.strip().strip('"')
-                print("✅ Successfully retrieved decryption key.")
-                break
-            else:
-                print(f"⏳ Waiting for password (Status {pw_resp.status_code}). Retrying in 5 seconds...")
+    if SKIP_INGEST:
+        print("⏭️  SKIP_INGEST=1, skipping decrypt and ingestion. Reusing existing indexes.")
+    else:
+        # 3. Wait for Decryption Key
+        print("🔑 Fetching decryption key from API...")
+        decryption_key = None
+        while not decryption_key:
+            try:
+                pw_resp = requests.get(
+                    "https://luciohackathon.purplewater-eec0a096.centralindia.azurecontainerapps.io/password",
+                    headers={"X-API-Key": API_KEY},
+                    timeout=10
+                )
+                if pw_resp.status_code == 200:
+                    try:
+                        data = pw_resp.json()
+                        decryption_key = data.get("password", data) if isinstance(data, dict) else data
+                    except Exception:
+                        decryption_key = pw_resp.text.strip().strip('"')
+                    print("✅ Successfully retrieved decryption key.")
+                    break
+                else:
+                    print(f"⏳ Waiting for password (Status {pw_resp.status_code}). Retrying in 5 seconds...")
+                    await asyncio.sleep(5)
+            except Exception as e:
+                print(f"❌ Error fetching password: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
-        except Exception as e:
-            print(f"❌ Error fetching password: {e}. Retrying in 5 seconds...")
-            await asyncio.sleep(5)
 
-    # 4. Decrypt and Extract
-    extract_dir = "data/extracted_pdfs"
-    os.makedirs(extract_dir, exist_ok=True)
-    
-    print(f"🔓 Extracting {zip_path} to {extract_dir}...")
-    # Use 7z to extract the archive
-    # e: extract, -o: output directory, -p: password, -y: assume yes
-    result = subprocess.run(
-        ["7z", "x", f"-p{decryption_key}", f"-o{extract_dir}", "-y", zip_path],
-        capture_output=True,
-        text=True
-    )
-    if result.returncode != 0:
-        print("❌ Failed to extract using 7z. Decryption key might be incorrect, file is corrupted, or 7z is not installed.")
-        print("Logs:\n", result.stderr)
-        print("Stdout:\n", result.stdout)
-        return
-        
-    print("✅ Extraction successful.")
-    
-    # Force Env vars for Fast Ingestion and FAISS
-    os.environ["FAST_INGEST"] = "1"
-    os.environ["VECTOR_BACKEND"] = "faiss"
+        # 4. Decrypt and Extract
+        extract_dir = "data/extracted_pdfs"
+        os.makedirs(extract_dir, exist_ok=True)
 
-    # 5. Run Ingestion on Extracted PDFs
-    print("⚙️ Running Ingestion Pipeline on extracted documents...")
-    await ingest(extract_dir)
-    print("✅ Ingestion complete.")
+        print(f"🔓 Extracting {zip_path} to {extract_dir}...")
+        # Use 7z to extract the archive
+        # e: extract, -o: output directory, -p: password, -y: assume yes
+        result = subprocess.run(
+            ["7z", "x", f"-p{decryption_key}", f"-o{extract_dir}", "-y", zip_path],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print("❌ Failed to extract using 7z. Decryption key might be incorrect, file is corrupted, or 7z is not installed.")
+            print("Logs:\n", result.stderr)
+            print("Stdout:\n", result.stdout)
+            return
+
+        print("✅ Extraction successful.")
+
+        # Force Env vars for Fast Ingestion and FAISS
+        os.environ["FAST_INGEST"] = "1"
+        os.environ["VECTOR_BACKEND"] = "faiss"
+
+        # 5. Run Ingestion on Extracted PDFs
+        print("⚙️ Running Ingestion Pipeline on extracted documents...")
+        await ingest(extract_dir)
+        print("✅ Ingestion complete.")
 
     # 6. Run Query Pipeline
     print("🤖 Running Query Pipeline with loaded questions...")
     query_results = await query(questions_list)
-    
+
     # Remap the question_ids to the actual IDs defined in the user's Excel sheet
     final_answers = []
     # Using enumerate here in case zipped answers are fewer than questions (failsafe)
@@ -164,7 +170,7 @@ async def main():
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
-    
+
     try:
         resp = requests.post(SUBMISSION_URL, headers=headers, json=payload, timeout=30)
         print("\n📬 HTTP Submission Result:")
@@ -173,7 +179,7 @@ async def main():
             print("Response:", json.dumps(resp.json(), indent=2))
         except ValueError:
             print("Response:", resp.text)
-            
+
         if resp.status_code in [200, 201]:
             print("🎉 Submission Successful!")
         else:

@@ -61,7 +61,6 @@ _cluster_map: dict         | None = None
 
 # FAISS singletons — loaded once, GPU-placed, held for process lifetime
 _faiss_coarse = None
-_faiss_full   = None
 _faiss_meta:  dict | None = None  # {int_row_id: chunk_metadata_dict}
 _gpu_res      = None              # faiss.StandardGpuResources
 
@@ -70,6 +69,9 @@ import threading
 
 _index_lock = threading.Lock()
 _faiss_lock = threading.Lock()
+# GPU FAISS search is not thread-safe with shared StandardGpuResources.
+# Serialize search calls to prevent allocator stack corruption.
+_faiss_search_lock = threading.Lock()
 
 def _load_indexes():
     global _bm25, _chunks, _cluster_map
@@ -89,7 +91,7 @@ def _load_indexes():
 
 def _load_faiss_indexes() -> None:
     """Load FAISS indexes from disk and GPU-place them.  Called once per process."""
-    global _faiss_coarse, _faiss_full, _faiss_meta, _gpu_res
+    global _faiss_coarse, _faiss_meta, _gpu_res
 
     with _faiss_lock:
         try:
@@ -106,10 +108,6 @@ def _load_faiss_indexes() -> None:
         if _faiss_coarse is None:
             cpu_idx = faiss.read_index(FAISS_COARSE_PATH)
             _faiss_coarse = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
-
-        if _faiss_full is None:
-            cpu_idx = faiss.read_index(FAISS_FULL_PATH)
-            _faiss_full = faiss.index_cpu_to_gpu(_gpu_res, 0, cpu_idx)
 
         if _faiss_meta is None:
             with open(FAISS_META_PATH, "rb") as f:
@@ -186,7 +184,8 @@ def _coarse_search_faiss(
 
     # Fetch more than COARSE_TOP_K when filtering so we can trim afterwards.
     k = COARSE_TOP_K * 4 if candidate_doc_ids else COARSE_TOP_K
-    _, indices = _faiss_coarse.search(vec, k)
+    with _faiss_search_lock:
+        _, indices = _faiss_coarse.search(vec, k)
 
     candidate_set = set(candidate_doc_ids) if candidate_doc_ids else None
     results: list[dict] = []

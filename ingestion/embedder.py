@@ -1,10 +1,10 @@
 """
 ingestion/embedder.py — Embedding module.
 
-Uses Snowflake/snowflake-arctic-embed-xs (22M params, 384-dim).
+Uses BAAI/bge-small-en-v1.5 (33M params, 384-dim).
 Produces TWO embedding vectors per chunk:
   - full   (384-dim): used for precise stage-2 reranking
-  - coarse (128-dim): truncated for fast stage-1 candidate retrieval
+  - coarse (384-dim): also 384-dim, no truncation for BGE-small (it's fast enough)
 
 On Apple M4, sentence-transformers will use the MPS backend automatically.
 """
@@ -12,6 +12,7 @@ On Apple M4, sentence-transformers will use the MPS backend automatically.
 import asyncio
 import threading
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 from ingestion.chunker import Chunk
 from config import (
@@ -28,8 +29,12 @@ _model_lock = threading.Lock()
 def get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        print(f"[EMBEDDER] Loading {EMBED_MODEL} ...")
-        _model = SentenceTransformer(EMBED_MODEL)
+        print(f"[EMBEDDER] Loading {EMBED_MODEL} in float16 ...")
+        _model = SentenceTransformer(
+            EMBED_MODEL, 
+            trust_remote_code=True,
+            model_kwargs={"torch_dtype": torch.float16}
+        )
         print(f"[EMBEDDER] ✅ Model loaded ({EMBED_DIM_FULL}-dim)")
     return _model
 
@@ -41,9 +46,9 @@ def _embed_batch(texts: list[str]) -> np.ndarray:
     Embed a batch of texts. Returns float32 array of shape (N, EMBED_DIM_FULL).
     """
     model = get_model()
-    prefixed = [f"{EMBED_DOC_PREFIX}{t}" for t in texts]
+    # Documentation suggests no specific prefix for docs, just raw text.
     vecs = model.encode(
-        prefixed,
+        texts,
         batch_size=EMBED_BATCH_SIZE,
         normalize_embeddings=True,
         show_progress_bar=False,
@@ -58,17 +63,21 @@ def _embed_query(query: str) -> tuple[np.ndarray, np.ndarray]:
     Uses a lock for thread safety during concurrent query embedding.
     """
     model = get_model()
+    # BGE-small-en-v1.5 instruction format: "{instruction}{query}"
+    prompt = f"{EMBED_QUERY_PREFIX}{query}"
+    
     with _model_lock:
         vec = model.encode(
-            f"{EMBED_QUERY_PREFIX}{query}",
+            prompt,
             normalize_embeddings=True,
             convert_to_numpy=True,
         ).astype(np.float32)
 
     full   = vec[:EMBED_DIM_FULL]
     coarse = vec[:EMBED_DIM_COARSE]
-    # re-normalize coarse after truncation
-    coarse = coarse / (np.linalg.norm(coarse) + 1e-9)
+    # re-normalize coarse after truncation (if dimensions are different)
+    if EMBED_DIM_FULL != EMBED_DIM_COARSE:
+        coarse = coarse / (np.linalg.norm(coarse) + 1e-9)
     return full, coarse
 
 
@@ -94,12 +103,13 @@ def embed_chunks(chunks: list[Chunk]) -> tuple[np.ndarray, np.ndarray]:
         if (i // EMBED_BATCH_SIZE) % 5 == 0:
             print(f"[EMBEDDER] ... {min(i + EMBED_BATCH_SIZE, n)}/{n}")
 
-    full_vecs = np.vstack(all_vecs)                        # (N, 384)
-    coarse_vecs = full_vecs[:, :EMBED_DIM_COARSE].copy()   # (N, 128)
+    full_vecs = np.vstack(all_vecs)                        # (N, EMBED_DIM_FULL)
+    coarse_vecs = full_vecs[:, :EMBED_DIM_COARSE].copy()   # (N, EMBED_DIM_COARSE)
 
-    # re-normalize coarse vectors after truncation
-    norms = np.linalg.norm(coarse_vecs, axis=1, keepdims=True)
-    coarse_vecs = coarse_vecs / (norms + 1e-9)
+    # re-normalize coarse vectors after truncation (if dimensions differ)
+    if EMBED_DIM_FULL != EMBED_DIM_COARSE:
+        norms = np.linalg.norm(coarse_vecs, axis=1, keepdims=True)
+        coarse_vecs = coarse_vecs / (norms + 1e-9)
 
     print(f"[EMBEDDER] ✅ Embeddings ready — "
           f"full {full_vecs.shape}, coarse {coarse_vecs.shape}")

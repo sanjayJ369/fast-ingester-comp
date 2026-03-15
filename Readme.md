@@ -9,25 +9,25 @@ INGESTION
   Documents (PDF, DOCX, HTML, CSV, Excel, TXT)
        │
        ▼
-  ┌──────────────┐     Arrow IPC      ┌──────────────────┐
-  │  Go Ingestor │ ──────────────────► │  Python Pipeline  │
-  │  Parse+Chunk │   chunks.arrow      │  Embed + Index    │
+     ┌──────────────┐     Arrow IPC (file or stream)     ┌──────────────────┐
+     │  Go Ingestor │ ───────────────────────────────────► │  Python Pipeline  │
+     │  Parse+Chunk │      chunks.arrow / UDS stream      │  Embed + Index    │
   └──────────────┘                     └────────┬─────────┘
                                                 │
-                         ┌──────────────────────┼──────────────────┐
-                         ▼                      ▼                  ▼
-                   Qdrant (384d)          BM25 Index         KMeans Clusters
-                   Qdrant (128d)          bm25_index.pkl     cluster_map.json
+                                                             ┌──────────────────────┼──────────────────────┬──────────────────┐
+                                                             ▼                      ▼                      ▼                  ▼
+                                             Qdrant (default)         FAISS (optional)       BM25 Index         KMeans Clusters
+                                         (384d + coarse index)    (GPU benchmark path)   bm25_index.pkl     cluster_map.json
 
 QUERY (30s budget)
   Questions
        │
        ▼
-  Embed query (384d + 128d)
+     Embed query (384d + coarse dim)
        │
        ├─► Cluster routing → candidate doc_ids
        │
-       ├─► Stage 1A: Coarse vector search (128d, top 50)
+     ├─► Stage 1A: Coarse vector search (top 50)
        ├─► Stage 1B: BM25 keyword search (top 20)
        │
        ▼
@@ -47,15 +47,15 @@ QUERY (30s budget)
 | **Parser** | Go (`go-ingestor/parser/`) | Multi-format document extraction with concurrency |
 | **Chunker** | Go (`go-ingestor/chunker/`) | Recursive splitting (512 chars, 64 overlap) with worker pool |
 | **Arrow Writer** | Go (`go-ingestor/writer/`) | Zero-copy IPC handoff to Python via Apache Arrow |
-| **Embedder** | Python (`ingestion/embedder.py`) | Snowflake Arctic Embed XS — dual output: 384d full + 128d coarse |
-| **Indexer** | Python (`storage/indexer.py`) | Builds Qdrant collections, BM25 index, and KMeans clusters |
-| **Retriever** | Python (`retrieval/retriever.py`) | Two-stage hybrid search with cluster-aware routing |
+| **Embedder** | Python (`ingestion/embedder.py`) | BAAI BGE-small v1.5 (384d full + configurable coarse dim) |
+| **Indexer** | Python (`storage/indexer.py`) | Builds Qdrant or FAISS indexes plus BM25 and KMeans clusters |
+| **Retriever** | Python (`retrieval/retriever.py`) | Two-stage hybrid search with cluster-aware routing and FAISS GPU-safe lock |
 | **Answerer** | Python (`query/answerer.py`) | LLM generation via Ollama (local) or Claude (cloud) |
 
 ### Project Structure
 
 ```
-fast-corpus-injestion/
+fast-ingester-comp/
 ├── config.py                # All tunable parameters
 ├── pipeline.py              # Main orchestrator (ingest + query)
 ├── fast_ingest.py           # Go+Arrow fast ingestion path
@@ -68,7 +68,7 @@ fast-corpus-injestion/
 ├── ingestion/
 │   ├── parser.py            # Async multi-format doc parser
 │   ├── chunker.py           # Character-level chunker
-│   └── embedder.py          # Arctic-xs embedding (384+128 dims)
+│   └── embedder.py          # BGE-small embedding (384d)
 ├── storage/
 │   └── indexer.py           # Qdrant + BM25 + KMeans indexing
 ├── retrieval/
@@ -98,7 +98,7 @@ fast-corpus-injestion/
 make setup
 ```
 
-This installs all system deps, Python/Go packages, pulls the Ollama model, and starts Qdrant in Docker.
+This installs system deps, Python/Go packages, and starts Qdrant in Docker.
 
 ### Manual Setup
 
@@ -143,7 +143,7 @@ docker run -d --name lucio_qdrant \
 ```bash
 # Option A: Ollama (free, local)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull mistral
+ollama pull mistral-small:24b
 
 # Option B: Claude API
 cp .env.example .env
@@ -199,8 +199,10 @@ All parameters are in `config.py` and can be overridden via environment variable
 |----------|---------|-------------|
 | `FAST_INGEST` | `0` | Set to `1` to use Go fast ingestion path |
 | `LLM_BACKEND` | `ollama` | `ollama` or `anthropic` |
-| `OLLAMA_MODEL` | `mistral` | Ollama model name |
+| `OLLAMA_MODEL` | `mistral-small:24b` | Ollama model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `VECTOR_BACKEND` | `qdrant` | `qdrant` or `faiss` |
+| `STREAMING_ENABLED` | `0` | Set to `1` to use UDS Arrow streaming ingestion path |
 | `ANTHROPIC_API_KEY` | — | Required for Claude backend |
 | `QDRANT_HOST` | `localhost` | Qdrant server host |
 
@@ -211,7 +213,7 @@ All parameters are in `config.py` and can be overridden via environment variable
 | `CHUNK_SIZE` | 512 | Characters per chunk |
 | `CHUNK_OVERLAP` | 64 | Overlap between chunks |
 | `EMBED_DIM_FULL` | 384 | Full embedding dimension |
-| `EMBED_DIM_COARSE` | 128 | Coarse embedding dimension |
+| `EMBED_DIM_COARSE` | 384 | Coarse embedding dimension |
 | `COARSE_TOP_K` | 50 | Stage 1 vector candidates |
 | `BM25_TOP_K` | 20 | Stage 1 BM25 candidates |
 | `FINAL_TOP_K` | 5 | Chunks sent to LLM |

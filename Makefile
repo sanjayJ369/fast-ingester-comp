@@ -5,7 +5,7 @@ GO_BIN       = $(GO_DIR)/ingestor
 PYTHON       ?= python3
 PIP          ?= pip3
 CORPUS       ?= ./Testing Set
-OLLAMA_MODEL ?= mistral
+OLLAMA_MODEL ?= mistral-small:24b
 
 # Build Go ingestor binary
 build:
@@ -57,7 +57,7 @@ setup:
 	$(PIP) install faiss-gpu-cu12
 	@echo "==> Installing Ollama..."
 	curl -fsSL https://ollama.com/install.sh | sh
-	ollama pull $(OLLAMA_MODEL)
+	# ollama pull $(OLLAMA_MODEL)
 	@echo "==> Starting Qdrant..."
 	docker run -d --name lucio_qdrant -p 6333:6333 -p 6334:6334 \
 		-v qdrant_data:/qdrant/storage qdrant/qdrant:latest || true
